@@ -22,53 +22,151 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const httpServer = createServer(app);
+
+// CORS Configuration
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  "http://localhost:5173",
+  "http://localhost:3000",
+].filter(Boolean);
+
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   },
 });
 
+// Connect to MongoDB
 connectDB();
 
+// Database Cleanup Function
+const cleanupDatabase = async () => {
+  try {
+    console.log("🧹 Starting database cleanup...");
+
+    const messagesDeleted = await Message.deleteMany({});
+    console.log(`📧 Deleted ${messagesDeleted.deletedCount} messages`);
+
+    const conversationsDeleted = await Conversation.deleteMany({});
+    console.log(
+      `💬 Deleted ${conversationsDeleted.deletedCount} conversations`
+    );
+
+    const usersDeleted = await User.deleteMany({});
+    console.log(`👥 Deleted ${usersDeleted.deletedCount} users`);
+
+    console.log("✅ Database cleanup completed successfully");
+  } catch (error) {
+    console.error("❌ Database cleanup error:", error.message);
+  }
+};
+
+// Auto-cleanup every 1 hour (3600000 ms)
+const CLEANUP_INTERVAL = 60 * 60 * 1000;
+
+setInterval(async () => {
+  console.log("⏰ Running scheduled database cleanup...");
+  await cleanupDatabase();
+}, CLEANUP_INTERVAL);
+
+// Optional: Run cleanup on server start
+if (process.env.CLEANUP_ON_START === "true") {
+  setTimeout(() => {
+    cleanupDatabase();
+  }, 5000); // Wait 5 seconds after server start
+}
+
+// Middleware
 app.use(helmet());
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   })
 );
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
+// Rate Limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: "Too many requests from this IP, please try again later.",
 });
 app.use("/api/auth", limiter);
 
+// Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/messages", messageRoutes);
 
+// Health Check Endpoint
+app.get("/", (req, res) => {
+  res.json({
+    message: "ChatLab API is running",
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// User Socket Map
 const userSocketMap = new Map();
 
+// Socket.IO Connection
 io.on("connection", (socket) => {
   console.log("✅ User connected:", socket.id);
 
+  // Verify origin
+  const origin = socket.handshake.headers.origin;
+  if (origin && !allowedOrigins.includes(origin)) {
+    console.log("❌ Unauthorized origin:", origin);
+    socket.disconnect();
+    return;
+  }
+
+  // User comes online
   socket.on("user-online", async (userId) => {
-    userSocketMap.set(userId, socket.id);
-    await User.findByIdAndUpdate(userId, {
-      isOnline: true,
-      lastSeen: new Date(),
-    });
-    io.emit("user-status-change", { userId, isOnline: true });
+    try {
+      userSocketMap.set(userId, socket.id);
+      await User.findByIdAndUpdate(userId, {
+        isOnline: true,
+        lastSeen: new Date(),
+      });
+      io.emit("user-status-change", { userId, isOnline: true });
+      console.log(`👤 User ${userId} is now online`);
+    } catch (error) {
+      console.error("Error setting user online:", error);
+    }
   });
 
+  // Join conversation room
   socket.on("join-conversation", (conversationId) => {
     socket.join(conversationId);
+    console.log(`💬 Socket ${socket.id} joined conversation ${conversationId}`);
   });
 
+  // Send message
   socket.on("send-message", async (data) => {
     try {
       const message = new Message({
@@ -107,12 +205,17 @@ io.on("connection", (socket) => {
           }
         }
       });
+
+      console.log(
+        `📨 Message sent in conversation ${data.conversationId}`
+      );
     } catch (error) {
       console.error("Message error:", error);
       socket.emit("message-error", { message: error.message });
     }
   });
 
+  // User typing
   socket.on("typing", (data) => {
     socket.to(data.conversationId).emit("user-typing", {
       userId: data.userId,
@@ -120,30 +223,77 @@ io.on("connection", (socket) => {
     });
   });
 
+  // User stop typing
   socket.on("stop-typing", (data) => {
     socket.to(data.conversationId).emit("user-stop-typing", {
       userId: data.userId,
     });
   });
 
+  // User disconnects
   socket.on("disconnect", async () => {
     console.log("❌ User disconnected:", socket.id);
 
     for (const [userId, socketId] of userSocketMap.entries()) {
       if (socketId === socket.id) {
         userSocketMap.delete(userId);
-        await User.findByIdAndUpdate(userId, {
-          isOnline: false,
-          lastSeen: new Date(),
-        });
-        io.emit("user-status-change", { userId, isOnline: false });
+        try {
+          await User.findByIdAndUpdate(userId, {
+            isOnline: false,
+            lastSeen: new Date(),
+          });
+          io.emit("user-status-change", { userId, isOnline: false });
+          console.log(`👤 User ${userId} is now offline`);
+        } catch (error) {
+          console.error("Error setting user offline:", error);
+        }
         break;
       }
     }
   });
 });
 
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error("Error:", err.message);
+  res.status(err.status || 500).json({
+    error: {
+      message: err.message || "Internal Server Error",
+    },
+  });
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    error: {
+      message: "Route not found",
+    },
+  });
+});
+
+// Start server
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`⏰ Database cleanup scheduled every 1 hour`);
 });
+
+// Graceful shutdown
+process.on("SIGTERM", async () => {
+  console.log("SIGTERM signal received: closing HTTP server");
+  httpServer.close(() => {
+    console.log("HTTP server closed");
+  });
+});
+
+process.on("SIGINT", async () => {
+  console.log("SIGINT signal received: closing HTTP server");
+  httpServer.close(() => {
+    console.log("HTTP server closed");
+    process.exit(0);
+  });
+});
+
+export default app;

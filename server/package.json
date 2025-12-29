@@ -8,7 +8,11 @@
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "keywords": ["chat", "socket.io", "real-time"],
+  "keywords": [
+    "chat",
+    "socket.io",
+    "real-time"
+  ],
   "author": "Rahuwul",
   "license": "MIT",
   "dependencies": {
@@ -25,5 +29,8 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

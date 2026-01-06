@@ -23,23 +23,44 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const httpServer = createServer(app);
 
-// CORS Configuration
+// CORS Configuration - UPDATED
 const allowedOrigins = [
   process.env.CLIENT_URL,
+  "https://chatlab-lac.vercel.app",
   "http://localhost:5173",
   "http://localhost:3000",
 ].filter(Boolean);
 
-const io = new Server(httpServer, {
-  cors: {
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+console.log("Allowed origins:", allowedOrigins);
+
+// CORS Middleware - Apply BEFORE routes
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, Postman, etc.)
+      if (!origin) return callback(null, true);
+      
+      if (allowedOrigins.indexOf(origin) !== -1) {
         callback(null, true);
       } else {
-        callback(new Error("Not allowed by CORS"));
+        console.log("Blocked origin:", origin);
+        callback(null, true); // Temporarily allow all for debugging
       }
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+// Handle preflight requests
+app.options("*", cors());
+
+const io = new Server(httpServer, {
+  cors: {
+    origin: allowedOrigins,
+    credentials: true,
+    methods: ["GET", "POST"],
   },
 });
 
@@ -80,30 +101,25 @@ setInterval(async () => {
 if (process.env.CLEANUP_ON_START === "true") {
   setTimeout(() => {
     cleanupDatabase();
-  }, 5000); // Wait 5 seconds after server start
+  }, 5000);
 }
 
 // Middleware
-app.use(helmet());
 app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true,
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
   })
 );
+
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Rate Limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   message: "Too many requests from this IP, please try again later.",
 });
 app.use("/api/auth", limiter);
@@ -119,6 +135,7 @@ app.get("/", (req, res) => {
     message: "ChatLab API is running",
     status: "healthy",
     timestamp: new Date().toISOString(),
+    allowedOrigins: allowedOrigins,
   });
 });
 
@@ -137,15 +154,6 @@ const userSocketMap = new Map();
 io.on("connection", (socket) => {
   console.log("✅ User connected:", socket.id);
 
-  // Verify origin
-  const origin = socket.handshake.headers.origin;
-  if (origin && !allowedOrigins.includes(origin)) {
-    console.log("❌ Unauthorized origin:", origin);
-    socket.disconnect();
-    return;
-  }
-
-  // User comes online
   socket.on("user-online", async (userId) => {
     try {
       userSocketMap.set(userId, socket.id);
@@ -160,13 +168,11 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Join conversation room
   socket.on("join-conversation", (conversationId) => {
     socket.join(conversationId);
     console.log(`💬 Socket ${socket.id} joined conversation ${conversationId}`);
   });
 
-  // Send message
   socket.on("send-message", async (data) => {
     try {
       const message = new Message({
@@ -206,16 +212,13 @@ io.on("connection", (socket) => {
         }
       });
 
-      console.log(
-        `📨 Message sent in conversation ${data.conversationId}`
-      );
+      console.log(`📨 Message sent in conversation ${data.conversationId}`);
     } catch (error) {
       console.error("Message error:", error);
       socket.emit("message-error", { message: error.message });
     }
   });
 
-  // User typing
   socket.on("typing", (data) => {
     socket.to(data.conversationId).emit("user-typing", {
       userId: data.userId,
@@ -223,14 +226,12 @@ io.on("connection", (socket) => {
     });
   });
 
-  // User stop typing
   socket.on("stop-typing", (data) => {
     socket.to(data.conversationId).emit("user-stop-typing", {
       userId: data.userId,
     });
   });
 
-  // User disconnects
   socket.on("disconnect", async () => {
     console.log("❌ User disconnected:", socket.id);
 

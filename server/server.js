@@ -23,9 +23,10 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const httpServer = createServer(app);
 
-// CORS Configuration - UPDATED
+// CORS Configuration - FIXED FOR VERCEL
 const allowedOrigins = [
   process.env.CLIENT_URL,
+  "https://chatlab-web.vercel.app",
   "https://chatlab-lac.vercel.app",
   "http://localhost:5173",
   "http://localhost:3000",
@@ -33,35 +34,77 @@ const allowedOrigins = [
 
 console.log("Allowed origins:", allowedOrigins);
 
-// CORS Middleware - Apply BEFORE routes
+// Middleware - Apply in correct order
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
+  })
+);
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// CORS Middleware - Must come AFTER body parsers
 app.use(
   cors({
     origin: function (origin, callback) {
-      // Allow requests with no origin (mobile apps, Postman, etc.)
+      // Allow requests with no origin (Postman, mobile apps, curl)
       if (!origin) return callback(null, true);
-      
+
       if (allowedOrigins.indexOf(origin) !== -1) {
         callback(null, true);
       } else {
         console.log("Blocked origin:", origin);
-        callback(null, true); // Temporarily allow all for debugging
+        callback(
+          new Error(`CORS policy does not allow origin: ${origin}`),
+          false
+        );
       }
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+    ],
+    exposedHeaders: ["Content-Range", "X-Content-Range"],
+    maxAge: 600, // Cache preflight for 10 minutes
   })
 );
 
-// Handle preflight requests
-app.options("*", cors());
+// Explicit OPTIONS handler for all routes
+app.options("*", (req, res) => {
+  const origin = req.headers.origin;
+  if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
+    res.header("Access-Control-Allow-Origin", origin || "*");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,DELETE,PATCH,OPTIONS"
+    );
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type,Authorization,X-Requested-With,Accept,Origin"
+    );
+    res.header("Access-Control-Max-Age", "600");
+    return res.sendStatus(204);
+  }
+  res.sendStatus(403);
+});
 
+// Socket.IO with CORS
 const io = new Server(httpServer, {
   cors: {
     origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST"],
   },
+  transports: ["polling", "websocket"],
+  allowEIO3: true,
 });
 
 // Connect to MongoDB
@@ -92,10 +135,13 @@ const cleanupDatabase = async () => {
 // Auto-cleanup every 1 hour (3600000 ms)
 const CLEANUP_INTERVAL = 60 * 60 * 1000;
 
-setInterval(async () => {
-  console.log("⏰ Running scheduled database cleanup...");
-  await cleanupDatabase();
-}, CLEANUP_INTERVAL);
+// Only run cleanup in production and not on serverless
+if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
+  setInterval(async () => {
+    console.log("⏰ Running scheduled database cleanup...");
+    await cleanupDatabase();
+  }, CLEANUP_INTERVAL);
+}
 
 // Optional: Run cleanup on server start
 if (process.env.CLEANUP_ON_START === "true") {
@@ -104,16 +150,6 @@ if (process.env.CLEANUP_ON_START === "true") {
   }, 5000);
 }
 
-// Middleware
-app.use(
-  helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" },
-    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
-  })
-);
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Rate Limiting
@@ -121,21 +157,19 @@ const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   message: "Too many requests from this IP, please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 app.use("/api/auth", limiter);
 
-// Routes
-app.use("/api/auth", authRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/messages", messageRoutes);
-
-// Health Check Endpoint
+// Health Check Endpoints (before other routes)
 app.get("/", (req, res) => {
   res.json({
     message: "ChatLab API is running",
     status: "healthy",
     timestamp: new Date().toISOString(),
     allowedOrigins: allowedOrigins,
+    environment: process.env.NODE_ENV || "development",
   });
 });
 
@@ -144,8 +178,14 @@ app.get("/api/health", (req, res) => {
     status: "ok",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
+    mongodb: "connected",
   });
 });
+
+// API Routes
+app.use("/api/auth", authRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/messages", messageRoutes);
 
 // User Socket Map
 const userSocketMap = new Map();
@@ -170,7 +210,9 @@ io.on("connection", (socket) => {
 
   socket.on("join-conversation", (conversationId) => {
     socket.join(conversationId);
-    console.log(`💬 Socket ${socket.id} joined conversation ${conversationId}`);
+    console.log(
+      `💬 Socket ${socket.id} joined conversation ${conversationId}`
+    );
   });
 
   socket.on("send-message", async (data) => {
@@ -191,14 +233,15 @@ io.on("connection", (socket) => {
         updatedAt: new Date(),
       });
 
-      const populatedMessage = await Message.findById(message._id).populate(
-        "sender",
-        "username profilePhoto"
-      );
+      const populatedMessage = await Message.findById(
+        message._id
+      ).populate("sender", "username profilePhoto");
 
       io.to(data.conversationId).emit("new-message", populatedMessage);
 
-      const conversation = await Conversation.findById(data.conversationId);
+      const conversation = await Conversation.findById(
+        data.conversationId
+      );
       conversation.participants.forEach((participantId) => {
         if (participantId.toString() !== data.senderId) {
           const socketId = userSocketMap.get(participantId.toString());
@@ -212,7 +255,9 @@ io.on("connection", (socket) => {
         }
       });
 
-      console.log(`📨 Message sent in conversation ${data.conversationId}`);
+      console.log(
+        `📨 Message sent in conversation ${data.conversationId}`
+      );
     } catch (error) {
       console.error("Message error:", error);
       socket.emit("message-error", { message: error.message });
@@ -257,6 +302,17 @@ io.on("connection", (socket) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error("Error:", err.message);
+
+  // Handle CORS errors specifically
+  if (err.message && err.message.includes("CORS")) {
+    return res.status(403).json({
+      error: {
+        message: "CORS policy violation",
+        details: err.message,
+      },
+    });
+  }
+
   res.status(err.status || 500).json({
     error: {
       message: err.message || "Internal Server Error",
@@ -264,22 +320,29 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
+// 404 handler (must be last)
 app.use((req, res) => {
   res.status(404).json({
     error: {
       message: "Route not found",
+      path: req.path,
     },
   });
 });
 
 // Start server
 const PORT = process.env.PORT || 5000;
-httpServer.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(`⏰ Database cleanup scheduled every 1 hour`);
-});
+
+// Only start HTTP server if not in Vercel environment
+if (!process.env.VERCEL) {
+  httpServer.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(
+      `🌍 Environment: ${process.env.NODE_ENV || "development"}`
+    );
+    console.log(`⏰ Database cleanup scheduled every 1 hour`);
+  });
+}
 
 // Graceful shutdown
 process.on("SIGTERM", async () => {
@@ -297,4 +360,5 @@ process.on("SIGINT", async () => {
   });
 });
 
+// Export for Vercel serverless
 export default app;

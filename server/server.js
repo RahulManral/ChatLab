@@ -23,184 +23,118 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const httpServer = createServer(app);
 
-// CORS Configuration - SIMPLIFIED FOR VERCEL
+// --- CORS Configuration ---
 const allowedOrigins = [
-  "https://chatlab-web.vercel.app",
+  process.env.CLIENT_URL,
   "https://chatlab-lac.vercel.app",
+  "https://chatlab-web.vercel.app", // Added your frontend URL explicitly
   "http://localhost:5173",
   "http://localhost:3000",
-];
+].filter(Boolean);
 
-if (process.env.CLIENT_URL) {
-  allowedOrigins.push(process.env.CLIENT_URL);
-}
-
-console.log("Allowed origins:", allowedOrigins);
-
-// Trust proxy for Vercel
-app.set("trust proxy", 1);
-
-// Basic middleware first
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-
-// Simple CORS - let vercel.json handle headers
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  } else if (!origin) {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-  }
-  
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET,POST,PUT,DELETE,PATCH,OPTIONS"
-  );
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type,Authorization,X-Requested-With,Accept,Origin"
-  );
-
-  // Handle preflight
-  if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Max-Age", "86400");
-    return res.status(204).end();
-  }
-
-  next();
-});
-
-// Helmet - minimal config for Vercel
 app.use(
-  helmet({
-    crossOriginResourcePolicy: false,
-    crossOriginOpenerPolicy: false,
-    contentSecurityPolicy: false,
+  cors({
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like Postman or mobile apps)
+      if (!origin) return callback(null, true);
+      
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.log("CORS Blocked Origin:", origin);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
+// Explicitly handle Preflight (OPTIONS) requests
+app.options("*", cors());
+
+// --- Socket.IO Configuration ---
 const io = new Server(httpServer, {
   cors: {
     origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST"],
   },
-  transports: ["polling", "websocket"],
-  allowEIO3: true,
 });
 
 // Connect to MongoDB
 connectDB();
 
-// Database Cleanup Function
+// --- Database Cleanup Logic ---
 const cleanupDatabase = async () => {
   try {
-    console.log("🧹 Starting database cleanup...");
-
-    const messagesDeleted = await Message.deleteMany({});
-    console.log(`📧 Deleted ${messagesDeleted.deletedCount} messages`);
-
-    const conversationsDeleted = await Conversation.deleteMany({});
-    console.log(
-      `💬 Deleted ${conversationsDeleted.deletedCount} conversations`
-    );
-
-    const usersDeleted = await User.deleteMany({});
-    console.log(`👥 Deleted ${usersDeleted.deletedCount} users`);
-
-    console.log("✅ Database cleanup completed successfully");
+    console.log("Starting database cleanup...");
+    await Message.deleteMany({});
+    await Conversation.deleteMany({});
+    await User.deleteMany({});
+    console.log("✅ Database cleanup completed");
   } catch (error) {
-    console.error("❌ Database cleanup error:", error.message);
+    console.error("❌ Cleanup error:", error.message);
   }
 };
 
-// Auto-cleanup - disabled on Vercel
-if (!process.env.VERCEL && process.env.NODE_ENV === "production") {
-  const CLEANUP_INTERVAL = 60 * 60 * 1000;
-  setInterval(async () => {
-    console.log("⏰ Running scheduled database cleanup...");
-    await cleanupDatabase();
-  }, CLEANUP_INTERVAL);
-}
+const CLEANUP_INTERVAL = 60 * 60 * 1000;
+setInterval(async () => {
+  await cleanupDatabase();
+}, CLEANUP_INTERVAL);
 
-// Optional: Run cleanup on server start
 if (process.env.CLEANUP_ON_START === "true") {
-  setTimeout(() => {
-    cleanupDatabase();
-  }, 5000);
+  setTimeout(() => cleanupDatabase(), 5000);
 }
 
+// --- Middleware ---
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
+  })
+);
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// Rate Limiting
+// --- Rate Limiting ---
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
-  message: "Too many requests from this IP, please try again later.",
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => {
-    // Skip rate limiting in development
-    return process.env.NODE_ENV !== "production";
-  },
+  message: "Too many requests, please try again later.",
 });
-
 app.use("/api/auth", limiter);
 
-// Health Check Endpoints
-app.get("/", (req, res) => {
-  res.json({
-    message: "ChatLab API is running",
-    status: "healthy",
-    timestamp: new Date().toISOString(),
-    allowedOrigins: allowedOrigins,
-    environment: process.env.NODE_ENV || "development",
-  });
-});
-
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "ok",
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
-    mongodb: "connected",
-  });
-});
-
-// API Routes
+// --- Routes ---
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/messages", messageRoutes);
 
-// User Socket Map
+app.get("/", (req, res) => {
+  res.json({
+    message: "ChatLab API is running",
+    status: "healthy",
+    allowedOrigins
+  });
+});
+
+// --- Socket.IO Connection ---
 const userSocketMap = new Map();
 
-// Socket.IO Connection
 io.on("connection", (socket) => {
   console.log("✅ User connected:", socket.id);
 
   socket.on("user-online", async (userId) => {
-    try {
-      userSocketMap.set(userId, socket.id);
-      await User.findByIdAndUpdate(userId, {
-        isOnline: true,
-        lastSeen: new Date(),
-      });
-      io.emit("user-status-change", { userId, isOnline: true });
-      console.log(`👤 User ${userId} is now online`);
-    } catch (error) {
-      console.error("Error setting user online:", error);
-    }
+    userSocketMap.set(userId, socket.id);
+    await User.findByIdAndUpdate(userId, { isOnline: true, lastSeen: new Date() });
+    io.emit("user-status-change", { userId, isOnline: true });
   });
 
   socket.on("join-conversation", (conversationId) => {
     socket.join(conversationId);
-    console.log(
-      `💬 Socket ${socket.id} joined conversation ${conversationId}`
-    );
   });
 
   socket.on("send-message", async (data) => {
@@ -210,139 +144,38 @@ io.on("connection", (socket) => {
         sender: data.senderId,
         content: data.content,
         messageType: data.messageType || "text",
-        fileUrl: data.fileUrl || "",
-        fileName: data.fileName || "",
       });
-
       await message.save();
-
-      await Conversation.findByIdAndUpdate(data.conversationId, {
-        lastMessage: message._id,
-        updatedAt: new Date(),
-      });
-
-      const populatedMessage = await Message.findById(
-        message._id
-      ).populate("sender", "username profilePhoto");
-
+      
+      const populatedMessage = await Message.findById(message._id).populate("sender", "username profilePhoto");
       io.to(data.conversationId).emit("new-message", populatedMessage);
-
-      const conversation = await Conversation.findById(
-        data.conversationId
-      );
-      conversation.participants.forEach((participantId) => {
-        if (participantId.toString() !== data.senderId) {
-          const socketId = userSocketMap.get(participantId.toString());
-          if (socketId) {
-            io.to(socketId).emit("notification", {
-              type: "new-message",
-              message: populatedMessage,
-              conversationId: data.conversationId,
-            });
-          }
-        }
-      });
-
-      console.log(
-        `📨 Message sent in conversation ${data.conversationId}`
-      );
     } catch (error) {
-      console.error("Message error:", error);
-      socket.emit("message-error", { message: error.message });
+      console.error("Socket Message Error:", error);
     }
   });
 
-  socket.on("typing", (data) => {
-    socket.to(data.conversationId).emit("user-typing", {
-      userId: data.userId,
-      username: data.username,
-    });
-  });
-
-  socket.on("stop-typing", (data) => {
-    socket.to(data.conversationId).emit("user-stop-typing", {
-      userId: data.userId,
-    });
-  });
-
   socket.on("disconnect", async () => {
-    console.log("❌ User disconnected:", socket.id);
-
     for (const [userId, socketId] of userSocketMap.entries()) {
       if (socketId === socket.id) {
         userSocketMap.delete(userId);
-        try {
-          await User.findByIdAndUpdate(userId, {
-            isOnline: false,
-            lastSeen: new Date(),
-          });
-          io.emit("user-status-change", { userId, isOnline: false });
-          console.log(`👤 User ${userId} is now offline`);
-        } catch (error) {
-          console.error("Error setting user offline:", error);
-        }
+        await User.findByIdAndUpdate(userId, { isOnline: false, lastSeen: new Date() });
+        io.emit("user-status-change", { userId, isOnline: false });
         break;
       }
     }
   });
 });
 
-// Error handling middleware
+// --- Error Handling ---
 app.use((err, req, res, next) => {
-  console.error("Error:", err.message);
-
-  if (err.message && err.message.includes("CORS")) {
-    return res.status(403).json({
-      error: {
-        message: "CORS policy violation",
-        details: err.message,
-      },
-    });
-  }
-
   res.status(err.status || 500).json({
-    error: {
-      message: err.message || "Internal Server Error",
-    },
+    error: { message: err.message || "Internal Server Error" },
   });
 });
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    error: {
-      message: "Route not found",
-      path: req.path,
-    },
-  });
-});
-
-// Start server - skip in Vercel
 const PORT = process.env.PORT || 5000;
-
-if (!process.env.VERCEL) {
-  httpServer.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(
-      `🌍 Environment: ${process.env.NODE_ENV || "development"}`
-    );
-  });
-}
-
-// Graceful shutdown
-process.on("SIGTERM", async () => {
-  console.log("SIGTERM signal received: closing HTTP server");
-  httpServer.close(() => {
-    console.log("HTTP server closed");
-  });
-});
-
-process.on("SIGINT", async () => {
-  console.log("SIGINT signal received: closing HTTP server");
-  httpServer.close(() => {
-    console.log("HTTP server closed");
-    process.exit(0);
-  });
+httpServer.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
 
 export default app;

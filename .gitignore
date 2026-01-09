@@ -4,9 +4,10 @@ node_modules/
 
 # Environment variables
 .env
-*/.env
 .env.local
-.env.production
+.env.development.local
+.env.test.local
+.env.production.local
 
 # Build outputs
 dist/
@@ -15,22 +16,20 @@ build/
 */build/
 
 # Logs
+logs
 *.log
 npm-debug.log*
-logs/
+yarn-debug.log*
+yarn-error.log*
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# IDE
+# Editor directories
 .vscode/
 .idea/
+.DS_Store
 
-# Uploads (if you have file uploads)
-server/uploads/*
-!server/uploads/.gitkeep
+# Uploads
+uploads/
+*/uploads/
 
-# Misc
-*.swp
-*.swo
+# Railway
+.railway

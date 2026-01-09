@@ -1,7 +1,0 @@
-[build]
-builder = "nixpacks"
-buildCommand = "echo 'No root build needed'"
-
-[deploy]
-startCommand = "echo 'Use service-specific commands'"
-restartPolicyType = "always"

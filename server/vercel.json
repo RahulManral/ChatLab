@@ -8,21 +8,18 @@
   ],
   "routes": [
     {
-      "src": "/(.*)",
+      "src": "/api/(.*)",
       "dest": "server.js",
-      "methods": [
-        "GET",
-        "POST",
-        "PUT",
-        "DELETE",
-        "PATCH",
-        "OPTIONS"
-      ]
+      "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+    },
+    {
+      "src": "/(.*)",
+      "dest": "server.js"
     }
   ],
   "headers": [
     {
-      "source": "/api/(.*)",
+      "source": "/(.*)",
       "headers": [
         {
           "key": "Access-Control-Allow-Origin",
@@ -34,7 +31,7 @@
         },
         {
           "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type,Authorization,X-Requested-With,Accept"
+          "value": "Content-Type,Authorization,X-Requested-With,Accept,Origin"
         },
         {
           "key": "Access-Control-Allow-Credentials",
@@ -42,7 +39,7 @@
         },
         {
           "key": "Access-Control-Max-Age",
-          "value": "600"
+          "value": "86400"
         }
       ]
     }

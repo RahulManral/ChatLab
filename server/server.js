@@ -23,80 +23,65 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const httpServer = createServer(app);
 
-// CORS Configuration - FIXED FOR VERCEL
+// CORS Configuration - SIMPLIFIED FOR VERCEL
 const allowedOrigins = [
-  process.env.CLIENT_URL,
   "https://chatlab-web.vercel.app",
   "https://chatlab-lac.vercel.app",
   "http://localhost:5173",
   "http://localhost:3000",
-].filter(Boolean);
+];
+
+if (process.env.CLIENT_URL) {
+  allowedOrigins.push(process.env.CLIENT_URL);
+}
 
 console.log("Allowed origins:", allowedOrigins);
 
-// Middleware - Apply in correct order
-app.use(
-  helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" },
-    crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
-  })
-);
+// Trust proxy for Vercel
+app.set("trust proxy", 1);
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Basic middleware first
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// CORS Middleware - Must come AFTER body parsers
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // Allow requests with no origin (Postman, mobile apps, curl)
-      if (!origin) return callback(null, true);
-
-      if (allowedOrigins.indexOf(origin) !== -1) {
-        callback(null, true);
-      } else {
-        console.log("Blocked origin:", origin);
-        callback(
-          new Error(`CORS policy does not allow origin: ${origin}`),
-          false
-        );
-      }
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-      "Accept",
-      "Origin",
-    ],
-    exposedHeaders: ["Content-Range", "X-Content-Range"],
-    maxAge: 600, // Cache preflight for 10 minutes
-  })
-);
-
-// Explicit OPTIONS handler for all routes
-app.options("*", (req, res) => {
+// Simple CORS - let vercel.json handle headers
+app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
-    res.header("Access-Control-Allow-Origin", origin || "*");
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,DELETE,PATCH,OPTIONS"
-    );
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type,Authorization,X-Requested-With,Accept,Origin"
-    );
-    res.header("Access-Control-Max-Age", "600");
-    return res.sendStatus(204);
+  
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  } else if (!origin) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
   }
-  res.sendStatus(403);
+  
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,DELETE,PATCH,OPTIONS"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type,Authorization,X-Requested-With,Accept,Origin"
+  );
+
+  // Handle preflight
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Max-Age", "86400");
+    return res.status(204).end();
+  }
+
+  next();
 });
 
-// Socket.IO with CORS
+// Helmet - minimal config for Vercel
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+    crossOriginOpenerPolicy: false,
+    contentSecurityPolicy: false,
+  })
+);
+
 const io = new Server(httpServer, {
   cors: {
     origin: allowedOrigins,
@@ -132,11 +117,9 @@ const cleanupDatabase = async () => {
   }
 };
 
-// Auto-cleanup every 1 hour (3600000 ms)
-const CLEANUP_INTERVAL = 60 * 60 * 1000;
-
-// Only run cleanup in production and not on serverless
-if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
+// Auto-cleanup - disabled on Vercel
+if (!process.env.VERCEL && process.env.NODE_ENV === "production") {
+  const CLEANUP_INTERVAL = 60 * 60 * 1000;
   setInterval(async () => {
     console.log("⏰ Running scheduled database cleanup...");
     await cleanupDatabase();
@@ -159,10 +142,15 @@ const limiter = rateLimit({
   message: "Too many requests from this IP, please try again later.",
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting in development
+    return process.env.NODE_ENV !== "production";
+  },
 });
+
 app.use("/api/auth", limiter);
 
-// Health Check Endpoints (before other routes)
+// Health Check Endpoints
 app.get("/", (req, res) => {
   res.json({
     message: "ChatLab API is running",
@@ -303,7 +291,6 @@ io.on("connection", (socket) => {
 app.use((err, req, res, next) => {
   console.error("Error:", err.message);
 
-  // Handle CORS errors specifically
   if (err.message && err.message.includes("CORS")) {
     return res.status(403).json({
       error: {
@@ -320,7 +307,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler (must be last)
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     error: {
@@ -330,17 +317,15 @@ app.use((req, res) => {
   });
 });
 
-// Start server
+// Start server - skip in Vercel
 const PORT = process.env.PORT || 5000;
 
-// Only start HTTP server if not in Vercel environment
 if (!process.env.VERCEL) {
   httpServer.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(
       `🌍 Environment: ${process.env.NODE_ENV || "development"}`
     );
-    console.log(`⏰ Database cleanup scheduled every 1 hour`);
   });
 }
 
@@ -360,5 +345,4 @@ process.on("SIGINT", async () => {
   });
 });
 
-// Export for Vercel serverless
 export default app;

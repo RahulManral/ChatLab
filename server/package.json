@@ -9,9 +9,15 @@
     "dev": "nodemon server.js"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=9.0.0"
+    "node": "20.x"
   },
+  "keywords": [
+    "chat",
+    "socket.io",
+    "real-time"
+  ],
+  "author": "Rahuwul",
+  "license": "MIT",
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",

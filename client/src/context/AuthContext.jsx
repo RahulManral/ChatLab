@@ -1,63 +1,53 @@
-import React, { createContext, useState, useContext, useEffect } from "react";
+import React, { createContext, useState, useEffect, useContext } from "react";
 import api from "../utils/api";
 
-const AuthContext = createContext(null);
+const AuthContext = createContext();
+
+export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    checkAuth();
+    const token = localStorage.getItem("token");
+    const savedUser = localStorage.getItem("user");
+
+    if (token && savedUser) {
+      setUser(JSON.parse(savedUser));
+      verifyToken();
+    } else {
+      setLoading(false);
+    }
   }, []);
 
-  const checkAuth = async () => {
+  const verifyToken = async () => {
     try {
-      const token = localStorage.getItem("token");
-      const savedUser = localStorage.getItem("user");
-
-      if (token && savedUser) {
-        setUser(JSON.parse(savedUser));
-      }
+      const response = await api.get("/auth/me");
+      setUser(response.data);
     } catch (error) {
-      console.error("Auth check failed:", error);
       localStorage.removeItem("token");
       localStorage.removeItem("user");
+      setUser(null);
     } finally {
       setLoading(false);
     }
   };
 
   const login = async (username, password) => {
-    try {
-      const response = await api.post("/auth/login", {
-        username,
-        password,
-      });
-      const { token, user } = response.data;
-      localStorage.setItem("token", token);
-      localStorage.setItem("user", JSON.stringify(user));
-      setUser(user);
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
+    const response = await api.post("/auth/login", { username, password });
+    localStorage.setItem("token", response.data.token);
+    localStorage.setItem("user", JSON.stringify(response.data.user));
+    setUser(response.data.user);
+    return response.data;
   };
 
   const register = async (username, password) => {
-    try {
-      const response = await api.post("/auth/register", {
-        username,
-        password,
-      });
-      const { token, user } = response.data;
-      localStorage.setItem("token", token);
-      localStorage.setItem("user", JSON.stringify(user));
-      setUser(user);
-      return response.data;
-    } catch (error) {
-      throw error;
-    }
+    const response = await api.post("/auth/register", { username, password });
+    localStorage.setItem("token", response.data.token);
+    localStorage.setItem("user", JSON.stringify(response.data.user));
+    setUser(response.data.user);
+    return response.data;
   };
 
   const logout = () => {
@@ -66,19 +56,16 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
+  const updateUser = (updatedUser) => {
+    setUser(updatedUser);
+    localStorage.setItem("user", JSON.stringify(updatedUser));
+  };
+
   return (
     <AuthContext.Provider
-      value={{ user, login, register, logout, loading }}
+      value={{ user, login, register, logout, updateUser, loading }}
     >
       {children}
     </AuthContext.Provider>
   );
-};
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return context;
 };

@@ -7,14 +7,13 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     minify: 'terser',
-    rollupOptions: {
-      output: {
-        manualChunks: undefined,
-      },
-    },
   },
   server: {
     port: 5173,
+    host: true,
+  },
+  preview: {
+    port: 10000,
     host: true,
   },
 })

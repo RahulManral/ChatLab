@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { MessageSquare } from "lucide-react";
-import logo from '../assets/chat.png'
+import { MessageSquare, Loader2 } from "lucide-react";
+import logo from "../assets/chat.png";
 
 export default function Register() {
   const [username, setUsername] = useState("");
@@ -33,7 +33,20 @@ export default function Register() {
       await register(username, password);
       navigate("/");
     } catch (err) {
-      setError(err.response?.data?.message || "Registration failed");
+      console.error("Registration error:", err);
+      
+      // Handle different error types
+      if (err.code === "ECONNABORTED" || err.message?.includes("timeout")) {
+        setError(
+          "Server is taking too long to respond. The backend might be waking up. Please try again in a moment."
+        );
+      } else if (err.message === "Network Error") {
+        setError(
+          "Cannot connect to server. Please check your internet connection."
+        );
+      } else {
+        setError(err.response?.data?.message || "Registration failed");
+      }
     } finally {
       setLoading(false);
     }
@@ -43,7 +56,6 @@ export default function Register() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600 dark:from-gray-900 dark:to-gray-800 p-4">
       <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 w-full max-w-md">
         <div className="flex items-center justify-center mb-8">
-          {/* <MessageSquare className="w-12 h-12 text-blue-500" /> */}
           <img src={logo} alt="ChatLab Logo" className="w-12 h-12" />
           <h1 className="text-3xl font-bold ml-2 text-gray-800 dark:text-white">
             Chat<span className="text-blue-500">Lab</span>
@@ -57,6 +69,16 @@ export default function Register() {
         {error && (
           <div className="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-600 text-red-700 dark:text-red-200 px-4 py-3 rounded mb-4">
             {error}
+          </div>
+        )}
+
+        {loading && (
+          <div className="bg-blue-100 dark:bg-blue-900 border border-blue-400 dark:border-blue-600 text-blue-700 dark:text-blue-200 px-4 py-3 rounded mb-4 flex items-center">
+            <Loader2 className="animate-spin mr-2" size={20} />
+            <span>
+              Connecting to server... This may take up to 30 seconds if the
+              server is starting up.
+            </span>
           </div>
         )}
 
@@ -108,9 +130,16 @@ export default function Register() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
           >
-            {loading ? "Creating account..." : "Register"}
+            {loading ? (
+              <>
+                <Loader2 className="animate-spin mr-2" size={20} />
+                Creating account...
+              </>
+            ) : (
+              "Register"
+            )}
           </button>
         </form>
 

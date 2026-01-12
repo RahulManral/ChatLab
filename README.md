@@ -110,12 +110,6 @@ npm run dev
 
 ---
 
-## 📸 UI Preview
-
-*(You can add screenshots of your app here)*
-
----
-
 ## 🤝 Contributing
 
 Contributions are always welcome!  
